@@ -2,7 +2,7 @@
 
 ## Description
 
-**ByteTrack** is a C# module designed to track and record runtime information (e.g., states, events, timings, process data, or basic metrics). Its goal is to provide traceability of what happens inside the system, making it easier to debug, analyze, and validate the overall workflow.
+**ByteTrack** is a multi-object tracking approach used to assign persistent IDs to objects detected by an AI model (e.g., YOLO) across frames. In practice, it takes the detections per frame (bounding boxes + confidence) and links them over time, so you can say “this is the same person/car as in the previous frames” and keep a stable track ID while it moves, gets partially occluded, or briefly disappears.
 
 ![TestBytetrack](https://raw.githubusercontent.com/Rainbowdashx1/Bytetrack/master/Bytetrack.gif)
 
