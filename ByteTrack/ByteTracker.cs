@@ -31,8 +31,8 @@ namespace ByteTrack
         public BYTETracker(int frame_rate = 30, int track_buffer = 30)
         {
             // Ajusta estos umbrales a tu preferencia
-            this.track_thresh = 0.5f;
-            this.high_thresh = 0.6f;
+            this.track_thresh = 0.30f;
+            this.high_thresh = 0.4f;
             this.match_thresh = 0.8f;
 
             this.frame_id = 0;

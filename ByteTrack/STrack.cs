@@ -1,9 +1,5 @@
-﻿using Microsoft.Win32.SafeHandles;
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Runtime.InteropServices;
-using System.Text;
 
 namespace ByteTrack
 {
@@ -22,9 +18,9 @@ namespace ByteTrack
         public int track_id;
         public TrackState state;
 
-        public List<float> _tlwh;
-        public List<float> tlwh;
-        public List<float> tlbr;
+        public float[] _tlwh;
+        public float[] tlwh;
+        public float[] tlbr;
 
         public float x2;
         public float y2;
@@ -39,19 +35,21 @@ namespace ByteTrack
 
         private static int _count = 0;
         private KalmanFilter kalman_filter;
+        private readonly DETECTBOX _xyahBox = new DETECTBOX();
 
         private const float Eps = 1e-6f;
 
         // Constructor
-        public STrack(List<float> tlwh_, float score, float x2, float y2)
+        public STrack(float[] tlwh_, float score, float x2, float y2)
         {
-            _tlwh = new List<float>(tlwh_);
+            _tlwh = new float[4];
+            Array.Copy(tlwh_, _tlwh, 4);
             is_activated = false;
             track_id = 0;
             state = TrackState.New;
 
-            tlwh = new List<float>() { 0, 0, 0, 0 };
-            tlbr = new List<float>() { 0, 0, 0, 0 };
+            tlwh = new float[4];
+            tlbr = new float[4];
 
             static_tlwh();
             static_tlbr();
@@ -61,28 +59,18 @@ namespace ByteTrack
             this.score = score;
             start_frame = 0;
             this.x2 = x2;
-            this.y2 = y2;   
+            this.y2 = y2;
         }
 
         public void activate(KalmanFilter kalman_filter, int frame_id)
         {
             this.kalman_filter = kalman_filter;
-            this.track_id = this.next_id();
+            this.track_id = next_id();
 
-            // Copiamos _tlwh en un array temporal
-            List<float> _tlwh_tmp = new List<float>(_tlwh);
+            // Convertimos _tlwh a xyah directamente en _xyahBox (cero asignaciones)
+            TlwhToXyah(_tlwh, _xyahBox);
 
-            // Convertimos a xyah
-            List<float> xyah = tlwh_to_xyah(_tlwh_tmp);
-
-            DETECTBOX xyah_box = new DETECTBOX();
-            for (int i = 0; i < 4; i++)
-            {
-                xyah_box[i] = xyah[i];
-            }
-
-            // Iniciamos Kalman
-            var mc = this.kalman_filter.initiate(xyah_box);
+            var mc = this.kalman_filter.initiate(_xyahBox);
             this.mean = mc.Item1;
             this.covariance = mc.Item2;
 
@@ -102,17 +90,9 @@ namespace ByteTrack
 
         public void re_activate(STrack new_track, int frame_id, bool new_id = false)
         {
-            // Convertimos la tlwh de new_track a xyah
-            List<float> xyah = tlwh_to_xyah(new_track.tlwh);
+            TlwhToXyah(new_track.tlwh, _xyahBox);
 
-            DETECTBOX xyah_box = new DETECTBOX();
-            for (int i = 0; i < 4; i++)
-            {
-                xyah_box[i] = xyah[i];
-            }
-
-            // Kalman update
-            var mc = this.kalman_filter.update(this.mean, this.covariance, xyah_box);
+            var mc = this.kalman_filter.update(this.mean, this.covariance, _xyahBox);
             this.mean = mc.Item1;
             this.covariance = mc.Item2;
 
@@ -134,16 +114,9 @@ namespace ByteTrack
             this.frame_id = frame_id;
             this.tracklet_len++;
 
-            // Convertimos a xyah
-            List<float> xyah = tlwh_to_xyah(new_track.tlwh);
+            TlwhToXyah(new_track.tlwh, _xyahBox);
 
-            DETECTBOX xyah_box = new DETECTBOX();
-            for (int i = 0; i < 4; i++)
-            {
-                xyah_box[i] = xyah[i];
-            }
-
-            var mc = this.kalman_filter.update(this.mean, this.covariance, xyah_box);
+            var mc = this.kalman_filter.update(this.mean, this.covariance, _xyahBox);
             this.mean = mc.Item1;
             this.covariance = mc.Item2;
 
@@ -160,68 +133,71 @@ namespace ByteTrack
         {
             if (this.state == TrackState.New)
             {
-                // Usa directamente _tlwh
-                for (int i = 0; i < 4; i++)
-                {
-                    tlwh[i] = _tlwh[i];
-                }
+                tlwh[0] = _tlwh[0];
+                tlwh[1] = _tlwh[1];
+                tlwh[2] = _tlwh[2];
+                tlwh[3] = _tlwh[3];
                 return;
             }
 
             // mean => [ x_center, y_center, ratio, h, ... ]
-            tlwh[0] = mean[0];
-            tlwh[1] = mean[1];
-            tlwh[2] = mean[2];
-            tlwh[3] = mean[3];
+            // Calcula valores finales en locales para evitar lecturas/escrituras intermedias al array
+            float h = mean[3];
+            if (h < Eps) h = Eps;
+            float w = mean[2] * h;
 
-            // asegurar altura positiva mínima
-            if (tlwh[3] < Eps) tlwh[3] = Eps;
-
-            // ancho = ratio * h
-            tlwh[2] *= tlwh[3];
-
-            // pasamos de (center_x, center_y) a topleft
-            tlwh[0] -= tlwh[2] / 2f;
-            tlwh[1] -= tlwh[3] / 2f;
+            tlwh[0] = mean[0] - w * 0.5f;
+            tlwh[1] = mean[1] - h * 0.5f;
+            tlwh[2] = w;
+            tlwh[3] = h;
         }
 
         private void static_tlbr()
         {
-            tlbr.Clear();
-            tlbr.AddRange(tlwh);
-            // tlbr[2] += tlbr[0]
-            tlbr[2] = tlbr[2] + tlbr[0];
-            // tlbr[3] += tlbr[1]
-            tlbr[3] = tlbr[3] + tlbr[1];
+            tlbr[0] = tlwh[0];
+            tlbr[1] = tlwh[1];
+            tlbr[2] = tlwh[0] + tlwh[2];
+            tlbr[3] = tlwh[1] + tlwh[3];
         }
 
-        public List<float> tlwh_to_xyah(List<float> tlwh_tmp)
+        /// <summary>
+        /// Escribe xyah (center_x, center_y, aspect_ratio, height) directamente en dest.
+        /// Cero asignaciones en el heap.
+        /// </summary>
+        private static void TlwhToXyah(float[] src, DETECTBOX dest)
         {
-            // tlwh => [x, y, w, h]
-            // => xyah => [x_center, y_center, w/h, h]
-            List<float> output = new List<float>(tlwh_tmp);
-            // asegurar h > 0 para evitar división por cero
-            if (output[3] < Eps) output[3] = Eps;
-            // x_center
-            output[0] += output[2] / 2f;
-            // y_center
-            output[1] += output[3] / 2f;
-            // ratio = w / h (clamp h)
-            output[2] = output[2] / output[3];
-            return output;
+            float w = src[2];
+            float h = src[3];
+            if (h < Eps) h = Eps;
+            dest[0] = src[0] + w * 0.5f;
+            dest[1] = src[1] + h * 0.5f;
+            dest[2] = w / h;
+            dest[3] = h;
         }
 
-        public List<float> to_xyah()
+        public float[] to_xyah()
         {
-            return tlwh_to_xyah(tlwh);
+            float w = tlwh[2];
+            float h = tlwh[3];
+            if (h < Eps) h = Eps;
+            return new float[]
+            {
+                tlwh[0] + w * 0.5f,
+                tlwh[1] + h * 0.5f,
+                w / h,
+                h
+            };
         }
 
-        public static List<float> tlbr_to_tlwh(ref List<float> tlbr)
+        public static float[] tlbr_to_tlwh(float[] tlbr)
         {
-            // [x1, y1, x2, y2] => [x1, y1, w, h]
-            tlbr[2] = tlbr[2] - tlbr[0];
-            tlbr[3] = tlbr[3] - tlbr[1];
-            return tlbr;
+            return new float[]
+            {
+                tlbr[0],
+                tlbr[1],
+                tlbr[2] - tlbr[0],
+                tlbr[3] - tlbr[1]
+            };
         }
 
         public void mark_lost()
@@ -249,14 +225,14 @@ namespace ByteTrack
         {
             for (int i = 0; i < stracks.Count; i++)
             {
-                if (stracks[i].state != TrackState.Tracked)
+                STrack st = stracks[i];
+                if (st.state != TrackState.Tracked)
                 {
-                    // anular velocidad de la altura si no está en estado Tracked
-                    stracks[i].mean[7] = 0;
+                    st.mean[7] = 0;
                 }
-                kalman_filter.predict(stracks[i].mean, stracks[i].covariance);
-                stracks[i].static_tlwh();
-                stracks[i].static_tlbr();
+                kalman_filter.predict(st.mean, st.covariance);
+                st.static_tlwh();
+                st.static_tlbr();
             }
         }
     }
